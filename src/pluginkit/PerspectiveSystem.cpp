@@ -1,18 +1,13 @@
 #include "PerspectiveSystem.hpp"
 #include "Dynamicam.hpp"
+#include "SignatureScan.hpp"
 #include <cmath>
 #include <cstring>
 
 namespace dynamicam {
 
-// ── Single instance of transition state for smooth perspective switching ─
-TransitionState &getTransitionState() {
-    static TransitionState s_state;
-    return s_state;
-}
-
 // ══════════════════════════════════════════════════════════════
-// Per-frame entry point
+// Per-frame entry point — called from hook_EGLSwapBuffers every frame
 // ══════════════════════════════════════════════════════════════
 
 void preRenderFrame(int screenWidth, int screenHeight) {
@@ -20,10 +15,10 @@ void preRenderFrame(int screenWidth, int screenHeight) {
     const auto &config = dyn.getConfig();
     TransitionState &trans = getTransitionState();
 
-    // Update smooth transition progress
+    // Update smooth transition progress when switching perspectives
     if (trans.active && trans.progress < 1.0f) {
-        float durationSec = 2.0f / config.smoothingSpeed;  // ~1-200s depending on slider
-        float frameTime = 1.0f / 60.0f;  // assume ~60fps
+        float durationSec = 2.0f / config.smoothingSpeed;
+        float frameTime = 1.0f / 60.0f;
         trans.progress += frameTime / durationSec;
         if (trans.progress >= 1.0f) {
             trans.progress = 1.0f;
@@ -34,119 +29,111 @@ void preRenderFrame(int screenWidth, int screenHeight) {
 }
 
 // ══════════════════════════════════════════════════════════════
-// Game-state accessors — resolved via dlsym + signature scanning
+// Game-state accessors — resolve via dlsym first, then scanning
+// Function pointers populated by initSignatureScanning() in RenderHooks
 // ══════════════════════════════════════════════════════════════
 
-static void *g_mcpeLib = nullptr;
+// These match the shared slots in SignatureScan.cpp — we use them directly
+extern void *s_scanned_GetPlayerPos;
+extern void *s_scanned_GetCameraPos;
+extern void *s_scanned_SetCameraPos;
+extern void *s_scanned_GetCameraRot;
+extern void *s_scanned_SetHeadVis;
 
-// Cached function pointers (populated in initSignatureScanning)
-static void *g_fnGetPlayerPos = nullptr;
-static void *g_fnGetCameraPos = nullptr;
-static void *g_fnSetCameraPos = nullptr;
-static void *g_fnGetCameraRot = nullptr;
-static void *g_fnSetCameraRot = nullptr;
-static void *g_fnSetHeadVis   = nullptr;
-
-// ---- getPlayerEyePosition ----
+// ---- getPlayerEyePosition: read player position + add eye height offset ----
 Vec3 getPlayerEyePosition() {
-    if (!g_mcpeLib || !g_fnGetPlayerPos) return Vec3{0.0f, 0.0f, 0.0f};
-
-    // Signature: __ZN10PlayerEntity10getPositionEv  -> Vec3 PlayerEntity::getPosition()
     using Fn = Vec3 (*)();
-    auto fn = reinterpret_cast<Fn>(g_fnGetPlayerPos);
-    Vec3 pos = fn();
+    auto fn = reinterpret_cast<Fn>(s_scanned_GetPlayerPos);
+    if (!fn) return Vec3{0.0f, 0.0f, 0.0f};
 
-    // Add eye height offset (~1.6 units above feet)
-    pos.y += 1.6f;
+    Vec3 pos = fn();
+    pos.y += 1.6f;   // eye level is ~1.6 units above feet
     return pos;
 }
 
-// ---- getPlayerLookDirection ----
+// ---- getPlayerLookDirection: convert camera yaw/pitch to unit direction vector ----
 Vec3 getPlayerLookDirection() {
-    if (!g_mcpeLib || !g_fnGetCameraRot) return Vec3{0.0f, 0.0f, -1.0f};
+    using Fn = void (*)(float *, float *);
+    auto fn = reinterpret_cast<Fn>(s_scanned_GetCameraRot);
+    if (!fn) return Vec3{0.0f, 0.0f, -1.0f};
 
     float pitch = 0.0f, yaw = 0.0f;
-    using Fn = void (*)(float *, float *);
-    auto fn = reinterpret_cast<Fn>(g_fnGetCameraRot);
     fn(&pitch, &yaw);
 
-    // Convert spherical coordinates → unit direction vector
-    float pitchRad = pitch * M_PI / 180.0f;
-    float yawRad = yaw * M_PI / 180.0f;
+    float pitchRad = pitch * static_cast<float>(M_PI / 180.0);
+    float yawRad = yaw * static_cast<float>(M_PI / 180.0);
     float cosPitch = std::cos(pitchRad);
 
     return Vec3{
-        -std::sin(yawRad) * cosPitch,   // x (forward-back on X axis)
-        std::sin(pitchRad),              // y (up-down)
-        -std::cos(yawRad) * cosPitch     // z (forward-back on Z axis)
+        -std::sin(yawRad) * cosPitch,   // x
+         std::sin(pitchRad),             // y (up/down)
+        -std::cos(yawRad) * cosPitch     // z
     };
 }
 
-// ---- getCurrentCameraPosition ----
+// ---- getCurrentCameraPosition: read current camera world coordinates ----
 Vec3 getCurrentCameraPosition() {
-    if (!g_mcpeLib || !g_fnGetCameraPos) return Vec3{0.0f, 0.0f, 0.0f};
-
-    float x = 0.0f, y = 0.0f, z = 0.0f;
     using Fn = void (*)(float *, float *, float *);
-    auto fn = reinterpret_cast<Fn>(g_fnGetCameraPos);
+    auto fn = reinterpret_cast<Fn>(s_scanned_GetCameraPos);
+    if (!fn) return Vec3{0.0f, 0.0f, 0.0f};
+
+    float x, y, z;
     fn(&x, &y, &z);
     return Vec3{x, y, z};
 }
 
-// ---- setCameraPosition ----
+// ---- setCameraPosition: write new camera world coordinates ----
 void setCameraPosition(const Vec3 &pos) {
-    if (!g_mcpeLib || !g_fnSetCameraPos) return;
-
     using Fn = void (*)(float, float, float);
-    auto fn = reinterpret_cast<Fn>(g_fnSetCameraPos);
+    auto fn = reinterpret_cast<Fn>(s_scanned_SetCameraPos);
+    if (!fn) return;
+
     fn(pos.x, pos.y, pos.z);
 }
 
-// ---- setCameraRotation ----
+// ---- setCameraRotation: write pitch and yaw in degrees ----
 void setCameraRotation(float pitchDeg, float yawDeg) {
-    if (!g_mcpeLib || !g_fnSetCameraRot) return;
-
     using Fn = void (*)(float, float);
-    auto fn = reinterpret_cast<Fn>(g_fnSetCameraRot);
+    auto fn = reinterpret_cast<Fn>(s_scanned_GetCameraRot);
+    if (!fn) return;
+
     fn(pitchDeg, yawDeg);
 }
 
-// ---- getCameraYaw ----
+// ---- getCameraYaw: read current yaw angle in degrees ----
 float getCameraYaw() {
-    if (!g_mcpeLib || !g_fnGetCameraRot) return 0.0f;
-
-    float pitch = 0.0f, yaw = 0.0f;
     using Fn = void (*)(float *, float *);
-    auto fn = reinterpret_cast<Fn>(g_fnGetCameraRot);
+    auto fn = reinterpret_cast<Fn>(s_scanned_GetCameraRot);
+    if (!fn) return 0.0f;
+
+    float pitch, yaw;
     fn(&pitch, &yaw);
     return yaw;
 }
 
-// ---- getCameraPitch ----
+// ---- getCameraPitch: read current pitch angle in degrees ----
 float getCameraPitch() {
-    if (!g_mcpeLib || !g_fnGetCameraRot) return 0.0f;
-
-    float pitch = 0.0f, yaw = 0.0f;
     using Fn = void (*)(float *, float *);
-    auto fn = reinterpret_cast<Fn>(g_fnGetCameraRot);
+    auto fn = reinterpret_cast<Fn>(s_scanned_GetCameraRot);
+    if (!fn) return 0.0f;
+
+    float pitch, yaw;
     fn(&pitch, &yaw);
     return pitch;
 }
 
-// ---- getRaycastTarget ----
+// ---- getRaycastTarget: returns (0,0,0) if nothing targeted ----
+// TODO: Hook into Minecraft hit-detection to return block center position
 Vec3 getRaycastTarget() {
-    // TODO: Implement by reading Minecraft hit-detection result
-    // This requires hooking into the raycast system in libminecraftpe.so
-    // For now returns zero — aim tracking is disabled until implemented
     return Vec3{0.0f, 0.0f, 0.0f};
 }
 
-// ---- setPlayerHeadVisible ----
+// ---- setPlayerHeadVisible: toggle head bone mesh visibility ----
 void setPlayerHeadVisible(bool visible) {
-    if (!g_mcpeLib || !g_fnSetHeadVis) return;
-
     using Fn = void (*)(bool);
-    auto fn = reinterpret_cast<Fn>(g_fnSetHeadVis);
+    auto fn = reinterpret_cast<Fn>(s_scanned_SetHeadVis);
+    if (!fn) return;
+
     fn(visible);
 }
 
