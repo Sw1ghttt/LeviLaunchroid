@@ -6,6 +6,13 @@
 
 namespace dynamicam {
 
+// Cached function-pointer slots shared with PerspectiveSystem.cpp
+extern void *s_scanned_GetPlayerPos;
+extern void *s_scanned_GetCameraPos;
+extern void *s_scanned_SetCameraPos;
+extern void *s_scanned_GetCameraRot;
+extern void *s_scanned_SetHeadVis;
+
 // Call once from RenderHooks::initHooks() if dlsym failed.
 void initSignatureScanning();
 
