@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "id": "blockmarker",
+  "version": "1.0.0",
+  "minecraft_versions": [
+    "1.26.5X.X"
+  ],
+  "info": {
+    "name": "Block Marker",
+    "author": "Sw1ghttt",
+    "description": "Highlight the block under you with a custom name and color. Great for marking traps.",
+    "homepage_url": "",
+    "icon": "assets/bedrocktools.png",
+    "tags": [
+      "Utility",
+      "Visual"
+    ]
+  },
+  "release_assets": {
+    "include": [
+      "*.levipack",
+      "*.so"
+    ],
+    "labels": {
+      "BlockMarker.levipack": "LeviPack",
+      "libBlockMarker.so": "Native library"
+    }
+  }
+}
