@@ -6,18 +6,24 @@
 #include <cstring>
 #include <limits>
 #include <sstream>
+#include <filesystem>
 #include <mutex>
+#include <string_view>
 
 namespace dynamicam {
 
 using DynCfg = Config;
 using DynMode = PerspectiveMode;
 
+// Defined in RenderHooks.cpp
+void initHooks();
+void uninitHooks();
+
 constexpr const char *kModuleId = "dynamicam.main";
 constexpr const char *kCycleButtonId = "dynamicam.cycle_pov";
 
 // SVG icon for the perspective cycle button (camera lens design)
-static constexpr unsigned char kLogoSvg[] = R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+[[maybe_unused]] static constexpr char kLogoSvg[] = R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
     <rect width="64" height="64" rx="12" fill="#1A1A2E"/>
     <circle cx="32" cy="28" r="12" fill="none" stroke="#E94560" stroke-width="3"/>
     <circle cx="32" cy="28" r="5" fill="#E94560"/>
@@ -44,7 +50,7 @@ static PerspectiveMode modeFromIndex(int index, PerspectiveMode fallback) {
     }
 }
 
-static double doubleToMenuValue(double value) {
+static std::string doubleToMenuValue(double value) {
     std::ostringstream stream;
     stream << value;
     return stream.str();
@@ -83,7 +89,6 @@ static bool parseBool(std::string_view value, bool fallback) {
 }
 
 static void normalizeConfig(Config &config) {
-    config.firstPersonEnabled = config.firstPersonEnabled;
     config.cameraOffsetX = std::clamp(config.cameraOffsetX, -2.0f, 2.0f);
     config.cameraOffsetY = std::clamp(config.cameraOffsetY, -2.0f, 2.0f);
     config.cameraOffsetZ = std::clamp(config.cameraOffsetZ, -2.0f, 2.0f);
@@ -153,9 +158,6 @@ bool Dynamicam::enable() {
         .modId(self.getId())
         .description("Camera perspectives & first-person body view. By Sw1ghttt")
         .defaultEnabled(true)
-        .onToggle([](std::string_view moduleId, bool enabled) {
-            instance().getSelf().getLogger().info("Dynamicam {}", enabled ? "enabled" : "disabled");
-        })
         // Toggle: enable/disable first person body
         .config("firstPersonEnabled", "Enable First Person Body",
                 pl::modmenu::ConfigType::Toggle,
@@ -338,7 +340,7 @@ void Dynamicam::handleConfigChanged(std::string_view moduleId, std::string_view 
 
 void Dynamicam::handleModuleToggle(std::string_view moduleId, bool enabled) {
     if (moduleId != kModuleId) return;
-    getSelf().getLogger().info("Module {} -> {}", moduleId.c_str(), enabled ? "ON" : "OFF");
+    getSelf().getLogger().info("Module {} -> {}", std::string(moduleId), enabled ? "ON" : "OFF");
 }
 
 } // namespace dynamicam

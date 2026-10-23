@@ -2,9 +2,11 @@
 
 #include <pl/Mod.hpp>
 #include <pl/ModMenu.hpp>
-#include <pl/Hook.hpp>
+#include <pl/Config.hpp>
+#include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <mutex>
 #include <atomic>
 
