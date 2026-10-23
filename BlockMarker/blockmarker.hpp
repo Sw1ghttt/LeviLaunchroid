@@ -3,6 +3,7 @@
 #include "Module.hpp"
 #include <bedrocktools/sdk/Types.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -23,6 +24,7 @@ public:
     void onEnable() override;
     void onDisable() override;
     void onFrame() override;
+    void onMenuRegistered() override;
     bool onMenuConfigChanged(std::string_view key, std::string_view value) override;
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
@@ -37,12 +39,19 @@ public:
     float m_thickness = 2.0f;     // 1..5 nested outlines
     float m_opacity = 1.0f;
     int m_renderDistance = 64;    // blocks, 0 = unlimited
-    bool m_topCross = true;       // draw an X on the top face so it is easy to see
-    bool m_currentDimensionOnly = true;
+    bool m_topCross = false;      // draw an X on the top face
+    bool m_fillTop = true;        // hatch the top face so it looks highlighted
+    bool m_currentDimensionOnly = false;
+
+    // set by the on-screen Mark / Erase buttons
+    std::atomic<bool> m_markPending{false}, m_markHeld{false};
+    std::atomic<bool> m_erasePending{false}, m_eraseHeld{false};
 
 private:
-    void placeMarker();
-    void removeMarkerUnderPlayer();
+    void placeMarker(bool quiet);
+    void removeMarkerUnderPlayer(bool quiet);
+    bool m_haveLast = false;
+    int m_lastX = 0, m_lastY = 0, m_lastZ = 0, m_lastDim = 0;
     void notify(const std::string& msg);
     bool blockUnderPlayer(int& x, int& y, int& z) const;
 

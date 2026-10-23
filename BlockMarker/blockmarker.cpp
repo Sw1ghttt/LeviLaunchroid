@@ -153,72 +153,94 @@ static float wrap180(float a) {
     return a - 180.f;
 }
 
-// Draws one glowing wireframe box (plus optional X on top) around block cell (x,y,z).
-// Coordinates are camera-relative like the rest of the world mesh.
-static void emitBox(void* t, float ox, float oy, float oz, float lo, float hi, bool topCross) {
-    auto V = [&](float x, float y, float z) { s_tessVertex(t, ox + x, oy + y, oz + z); };
-    auto L = [&](float x1, float y1, float z1, float x2, float y2, float z2) { V(x1, y1, z1); V(x2, y2, z2); };
-    // bottom ring
-    L(lo, lo, lo, hi, lo, lo); L(hi, lo, lo, hi, lo, hi); L(hi, lo, hi, lo, lo, hi); L(lo, lo, hi, lo, lo, lo);
-    // top ring
-    L(lo, hi, lo, hi, hi, lo); L(hi, hi, lo, hi, hi, hi); L(hi, hi, hi, lo, hi, hi); L(lo, hi, hi, lo, hi, lo);
-    // verticals
-    L(lo, lo, lo, lo, hi, lo); L(hi, lo, lo, hi, hi, lo); L(hi, lo, hi, hi, hi, hi); L(lo, lo, hi, lo, hi, hi);
-    if (topCross) {
-        L(lo, hi, lo, hi, hi, hi);
-        L(hi, hi, lo, lo, hi, hi);
+struct Seg { float x1, y1, z1, x2, y2, z2; };
+
+// Builds the outline (and optional hatch fill on the top face) for block cell (0..1) in local coords.
+static void buildMarkerSegs(std::vector<Seg>& out, int layers, bool topCross, bool fillTop) {
+    auto L = [&](float x1, float y1, float z1, float x2, float y2, float z2) { out.push_back({x1, y1, z1, x2, y2, z2}); };
+    for (int k = 0; k < layers; ++k) {
+        const float e = 0.004f + 0.012f * k;   // each extra layer grows outward = thicker line
+        const float lo = -e, hi = 1.f + e;
+        L(lo, lo, lo, hi, lo, lo); L(hi, lo, lo, hi, lo, hi); L(hi, lo, hi, lo, lo, hi); L(lo, lo, hi, lo, lo, lo);
+        L(lo, hi, lo, hi, hi, lo); L(hi, hi, lo, hi, hi, hi); L(hi, hi, hi, lo, hi, hi); L(lo, hi, hi, lo, hi, lo);
+        L(lo, lo, lo, lo, hi, lo); L(hi, lo, lo, hi, hi, lo); L(hi, lo, hi, hi, hi, hi); L(lo, lo, hi, lo, hi, hi);
+    }
+    const float t = 1.004f;
+    if (topCross) { L(0, t, 0, 1, t, 1); L(1, t, 0, 0, t, 1); }
+    if (fillTop) { // hatch lines make the top face look filled like a highlighter
+        for (int i = 1; i < 8; ++i) {
+            float f = i / 8.f;
+            L(0, t, f, 1, t, f);
+            L(f, t, 0, f, t, 1);
+        }
     }
 }
 
 static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
-    if (g_bm && g_bm->enabled && g_bm->m_showMarkers && s_tessBegin && s_tessColor && s_tessVertex && s_renderMesh) {
-        auto markers = g_bm->snapshotMarkers();
-        if (!markers.empty()) {
-            uintptr_t tessPtr = *(uintptr_t*)((uintptr_t)screenContext + bedrocktools::sdk::offsets::ScreenContext::mTessellator);
-            uintptr_t lrpPtr = *(uintptr_t*)((uintptr_t)_this + bedrocktools::sdk::offsets::LevelRenderer::mLevelRendererPlayer);
-            uintptr_t holderPtr = *(uintptr_t*)((uintptr_t)screenContext + bedrocktools::sdk::offsets::ScreenContext::mColorHolder);
-            if (tessPtr >= 0x1000 && lrpPtr >= 0x1000 && holderPtr >= 0x1000) {
-                void* tess = (void*)tessPtr;
-                float camX = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos);
-                float camY = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 4);
-                float camZ = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 8);
-                ensureMaterials();
-                void* mat = s_matSelection ? (void*)&s_matSelection
-                                           : (void*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mSelectionOverlayMaterial);
-
-                float* holder = (float*)holderPtr;
-                float saved[4] = {holder[0], holder[1], holder[2], holder[3]};
-                holder[0] = holder[1] = holder[2] = holder[3] = 1.0f;
-
-                const int layers = std::max(1, std::min(5, (int)std::lround(g_bm->m_thickness)));
-                const float op = std::max(0.f, std::min(1.f, g_bm->m_opacity));
-                const int curDim = g_bm->currentDim();
-                bool any = false;
-
-                s_tessBegin(tess, nullptr, 4, 0, 0);
-                for (auto& m : markers) {
-                    if (g_bm->m_currentDimensionOnly && m.dim != curDim) continue;
-                    float r = ((m.color >> 16) & 0xFF) / 255.f;
-                    float g = ((m.color >> 8) & 0xFF) / 255.f;
-                    float b = (m.color & 0xFF) / 255.f;
-                    float a = ((m.color >> 24) & 0xFF) / 255.f * op;
-                    s_tessColor(tess, r, g, b, a);
-                    for (int k = 0; k < layers; ++k) {
-                        float e = 0.004f + 0.012f * k;     // grow outward so layers look thicker
-                        emitBox(tess, (float)m.x - camX, (float)m.y - camY, (float)m.z - camZ, -e, 1.f + e, k == 0 && g_bm->m_topCross);
-                    }
-                    any = true;
-                }
-                if (any) {
-                    char pad[0x58];
-                    std::memset(pad, 0, sizeof pad);
-                    s_renderMesh(screenContext, tess, mat, pad);
-                }
-                holder[0] = saved[0]; holder[1] = saved[1]; holder[2] = saved[2]; holder[3] = saved[3];
-            }
-        }
-    }
+    // Let the game draw the world first, then draw on top. The outline is then depth-tested against
+    // the finished world, so it is hidden behind walls/terrain instead of showing through them.
     if (_renderLevel_orig) _renderLevel_orig(_this, screenContext, a3);
+
+    if (!g_bm || !g_bm->enabled || !g_bm->m_showMarkers) return;
+    if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) return;
+    if (!screenContext || (uintptr_t)screenContext < 0x1000 || !_this) return;
+
+    auto markers = g_bm->snapshotMarkers();
+    if (markers.empty()) return;
+
+    uintptr_t tessPtr = *(uintptr_t*)((uintptr_t)screenContext + bedrocktools::sdk::offsets::ScreenContext::mTessellator);
+    uintptr_t lrpPtr = *(uintptr_t*)((uintptr_t)_this + bedrocktools::sdk::offsets::LevelRenderer::mLevelRendererPlayer);
+    uintptr_t holderPtr = *(uintptr_t*)((uintptr_t)screenContext + bedrocktools::sdk::offsets::ScreenContext::mColorHolder);
+    if (tessPtr < 0x1000 || lrpPtr < 0x1000 || holderPtr < 0x1000) return;
+
+    void* tess = (void*)tessPtr;
+    float camX = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos);
+    float camY = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 4);
+    float camZ = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 8);
+
+    ensureMaterials();
+    void* mat = s_matSelection ? (void*)&s_matSelection
+                               : (void*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mSelectionOverlayMaterial);
+
+    float* holder = (float*)holderPtr;
+    float saved[4] = {holder[0], holder[1], holder[2], holder[3]};
+    holder[0] = holder[1] = holder[2] = holder[3] = 1.0f;
+
+    const int layers = std::max(1, std::min(5, (int)std::lround(g_bm->m_thickness)));
+    const float op = std::max(0.f, std::min(1.f, g_bm->m_opacity));
+    const int curDim = g_bm->currentDim();
+    const double maxD = g_bm->m_renderDistance > 0 ? (double)g_bm->m_renderDistance : 1e9;
+
+    std::vector<Seg> segs;
+    int drawn = 0;
+    for (auto& m : markers) {
+        if (drawn >= 150) break;
+        if (g_bm->m_currentDimensionOnly && m.dim != curDim) continue;
+        double dx = m.x + 0.5 - camX, dy = m.y + 0.5 - camY, dz = m.z + 0.5 - camZ;
+        if (std::sqrt(dx * dx + dy * dy + dz * dz) > maxD) continue;
+
+        segs.clear();
+        buildMarkerSegs(segs, layers, g_bm->m_topCross, g_bm->m_fillTop);
+
+        float r = ((m.color >> 16) & 0xFF) / 255.f;
+        float g = ((m.color >> 8) & 0xFF) / 255.f;
+        float b = (m.color & 0xFF) / 255.f;
+        float a = ((m.color >> 24) & 0xFF) / 255.f * op;
+
+        s_tessBegin(tess, nullptr, 4, (int)segs.size() * 2, 0);
+        s_tessColor(tess, r, g, b, a);
+        const float ox = (float)m.x - camX, oy = (float)m.y - camY, oz = (float)m.z - camZ;
+        for (auto& q : segs) {
+            s_tessVertex(tess, ox + q.x1, oy + q.y1, oz + q.z1);
+            s_tessVertex(tess, ox + q.x2, oy + q.y2, oz + q.z2);
+        }
+        char pad[0x58];
+        std::memset(pad, 0, sizeof pad);
+        s_renderMesh(screenContext, tess, mat, pad);
+        ++drawn;
+    }
+
+    holder[0] = saved[0]; holder[1] = saved[1]; holder[2] = saved[2]; holder[3] = saved[3];
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +282,39 @@ void BlockMarkerModule::onEnable() {
     }
 }
 
-void BlockMarkerModule::onDisable() {}
+void BlockMarkerModule::onDisable() {
+    m_markHeld = false;
+    m_eraseHeld = false;
+}
+
+static void onFloatingButton(std::string_view id, pl::modmenu::ButtonEvent ev, float) {
+    if (!g_bm) return;
+    const bool isMark = (id == "blockmarker.mark_button");
+    if (ev == pl::modmenu::ButtonEvent::Down) {
+        if (isMark) { g_bm->m_markPending = true; g_bm->m_markHeld = true; }
+        else { g_bm->m_erasePending = true; g_bm->m_eraseHeld = true; }
+    } else if (ev == pl::modmenu::ButtonEvent::Up) {
+        if (isMark) g_bm->m_markHeld = false;
+        else g_bm->m_eraseHeld = false;
+    }
+}
+
+void BlockMarkerModule::onMenuRegistered() {
+    // Floating on-screen buttons. Tap = act once on the block under you; hold while walking = keep going.
+    pl::modmenu::ButtonBuilder("blockmarker.mark_button", "Block Marker: Mark")
+        .moduleId(moduleId)
+        .label("Mark")
+        .behavior(pl::modmenu::ButtonBehavior::Hold)
+        .stylePreset(pl::modmenu::ButtonStylePreset::Accent)
+        .onEvent(onFloatingButton)
+        .registerButton();
+    pl::modmenu::ButtonBuilder("blockmarker.erase_button", "Block Marker: Erase")
+        .moduleId(moduleId)
+        .label("Erase")
+        .behavior(pl::modmenu::ButtonBehavior::Hold)
+        .onEvent(onFloatingButton)
+        .registerButton();
+}
 
 void BlockMarkerModule::onTick(bedrocktools::sdk::Player* player) {
     if (!player) { m_valid = false; return; }
@@ -273,6 +327,22 @@ void BlockMarkerModule::onTick(bedrocktools::sdk::Player* player) {
     }
     m_dim = (dim >= 0 && dim <= 2) ? dim : 0;
     m_valid = true;
+
+    // On-screen Mark / Erase buttons: a tap always acts once, holding keeps acting as you walk.
+    const bool doMark = m_markPending.exchange(false) || m_markHeld.load();
+    const bool doErase = m_erasePending.exchange(false) || m_eraseHeld.load();
+    if (doMark || doErase) {
+        int x, y, z;
+        if (blockUnderPlayer(x, y, z)) {
+            const bool sameCell = m_haveLast && x == m_lastX && y == m_lastY && z == m_lastZ && m_dim == m_lastDim;
+            if (!sameCell) {
+                m_haveLast = true; m_lastX = x; m_lastY = y; m_lastZ = z; m_lastDim = m_dim;
+                if (doMark) placeMarker(true);
+                else removeMarkerUnderPlayer(true);
+            }
+        }
+    }
+    if (!m_markHeld.load() && !m_eraseHeld.load()) m_haveLast = false;
 }
 
 std::vector<MarkerEntry> BlockMarkerModule::snapshotMarkers() {
@@ -304,9 +374,9 @@ bool BlockMarkerModule::blockUnderPlayer(int& x, int& y, int& z) const {
     return true;
 }
 
-void BlockMarkerModule::placeMarker() {
+void BlockMarkerModule::placeMarker(bool quiet) {
     int x, y, z;
-    if (!blockUnderPlayer(x, y, z)) { notify("Block Marker: join a world first"); return; }
+    if (!blockUnderPlayer(x, y, z)) { if (!quiet) notify("Block Marker: join a world first"); return; }
     std::string nm = m_markerName;
     size_t b0 = nm.find_first_not_of(" \t");
     size_t b1 = nm.find_last_not_of(" \t");
@@ -317,7 +387,7 @@ void BlockMarkerModule::placeMarker() {
         if (m.x == x && m.y == y && m.z == z && m.dim == m_dim) { // already marked: update it
             if (!nm.empty()) m.name = nm;
             m.color = col;
-            notify("Updated: " + m.name);
+            if (!quiet) notify("Updated: " + m.name);
             return;
         }
     }
@@ -326,12 +396,12 @@ void BlockMarkerModule::placeMarker() {
     e.name = nm.empty() ? ("Marker " + std::to_string(m_markers.size() + 1)) : nm;
     e.x = x; e.y = y; e.z = z; e.dim = m_dim; e.color = col;
     m_markers.push_back(e);
-    notify("Marked: " + e.name);
+    notify((quiet ? "Marking: " : "Marked: ") + e.name);
 }
 
-void BlockMarkerModule::removeMarkerUnderPlayer() {
+void BlockMarkerModule::removeMarkerUnderPlayer(bool quiet) {
     int x, y, z;
-    if (!blockUnderPlayer(x, y, z)) { notify("Block Marker: join a world first"); return; }
+    if (!blockUnderPlayer(x, y, z)) { if (!quiet) notify("Block Marker: join a world first"); return; }
     std::lock_guard<std::mutex> g(m_lock);
     for (size_t i = 0; i < m_markers.size(); ++i) {
         auto& m = m_markers[i];
@@ -341,12 +411,12 @@ void BlockMarkerModule::removeMarkerUnderPlayer() {
             return;
         }
     }
-    notify("No marker under you");
+    if (!quiet) notify("No marker under you");
 }
 
 bool BlockMarkerModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
-    if (key == "placeMarkerButton") { placeMarker(); return true; }
-    if (key == "removeMarkerButton") { removeMarkerUnderPlayer(); return true; }
+    if (key == "placeMarkerButton") { placeMarker(false); return true; }
+    if (key == "removeMarkerButton") { removeMarkerUnderPlayer(false); return true; }
     if (key == "removeSelectedButton" || key == "applyToSelectedButton") {
         std::lock_guard<std::mutex> g(m_lock);
         int i = m_selectNumber - 1;
@@ -431,7 +501,7 @@ void BlockMarkerModule::loadConfig(const nlohmann::json& j) {
     f("hudPosX", hudPosX); f("hudPosY", hudPosY); f("isHudModule", isHudModule);
     f("m_markerName", m_markerName); f("m_markerColor", m_markerColor);
     f("m_selectNumber", m_selectNumber);
-    f("m_showMarkers", m_showMarkers); f("m_topCross", m_topCross);
+    f("m_showMarkers", m_showMarkers); f("m_topCross", m_topCross); f("m_fillTop", m_fillTop);
     f("m_thickness", m_thickness); f("m_opacity", m_opacity);
     f("m_renderDistance", m_renderDistance); f("m_currentDimensionOnly", m_currentDimensionOnly);
     f("m_showList", m_showList); f("m_listSize", m_listSize); f("m_showDistance", m_showDistance);
@@ -470,7 +540,7 @@ void BlockMarkerModule::saveConfig(nlohmann::json& j) {
     j["removeSelectedButton"] = false;
     j["m_confirmClear"] = m_confirmClear;
     j["clearAllButton"] = false;
-    j["m_showMarkers"] = m_showMarkers; j["m_topCross"] = m_topCross;
+    j["m_showMarkers"] = m_showMarkers; j["m_topCross"] = m_topCross; j["m_fillTop"] = m_fillTop;
     j["m_thickness"] = m_thickness; j["m_opacity"] = m_opacity;
     j["m_renderDistance"] = m_renderDistance; j["m_currentDimensionOnly"] = m_currentDimensionOnly;
     j["m_showList"] = m_showList; j["m_listSize"] = m_listSize; j["m_showDistance"] = m_showDistance;
