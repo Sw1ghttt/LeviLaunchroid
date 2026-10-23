@@ -1,0 +1,44 @@
+name: Build BlockMarker
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get BedrockTools base code (pinned)
+        run: |
+          git clone https://github.com/QYCottage/BedrockTools.git base
+          git -C base checkout b0ed3e9a0e5cb598dc5c93f22e5f159de80d5d95
+
+      - name: Apply BlockMarker files
+        run: |
+          cp blockmarker/blockmarker.hpp blockmarker/blockmarker.cpp blockmarker/ModuleRegistry.cpp blockmarker/Module.hpp base/src/modules/
+          cp blockmarker/Version.hpp base/include/bedrocktools/Version.hpp
+          cp blockmarker/package_levipack.py base/scripts/package_levipack.py
+          cp blockmarker/xmake.lua base/xmake.lua
+          cp blockmarker/levimod.json base/levimod.json
+          rm -rf base/src/modules/hud base/src/modules/misc base/src/modules/player base/src/modules/visual
+
+      - name: Setup xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r28c
+
+      - name: Build and package
+        working-directory: base
+        run: |
+          xmake f -y -p android -a arm64-v8a -m release --ndk=${{ steps.ndk.outputs.ndk-path }}
+          xmake -y
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BlockMarker-levipack
+          path: base/build/android/arm64-v8a/release/BlockMarker.levipack
+          if-no-files-found: error
