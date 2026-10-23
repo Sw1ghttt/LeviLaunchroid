@@ -27,7 +27,7 @@ void HotItemRender::onPreItemRender(const Vec3 &cameraPos) {
     // For now we store the values for external use if needed.
     (void)cameraPos;
     (void)bobAmount;
-    (void)singAmount;
+    (void)swingAmount;
 }
 
 // ════════════════════════════════════════════════════════════
