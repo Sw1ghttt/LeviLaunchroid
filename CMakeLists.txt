@@ -28,13 +28,13 @@ include_directories(
 # ── All source files ──────────────────────────────────────────
 set(SOURCES
     src/main.cpp
-    src/pluginkit/Dynamicam.cpp
-    src/pluginkit/CameraManager.cpp
-    src/pluginkit/RenderHooks.cpp
-    src/pluginkit/PerspectiveSystem.cpp
-    src/pluginkit/EmoteFreecam.cpp
-    src/pluginkit/HotItemRender.cpp
-    src/pluginkit/SignatureScan.cpp
+    src/module/Dynamicam.cpp
+    src/module/CameraManager.cpp
+    src/module/RenderHooks.cpp
+    src/module/PerspectiveSystem.cpp
+    src/module/EmoteFreecam.cpp
+    src/module/HotItemRender.cpp
+    src/module/SignatureScan.cpp
 )
 
 # ── Build shared library (.so) ────────────────────────────────
