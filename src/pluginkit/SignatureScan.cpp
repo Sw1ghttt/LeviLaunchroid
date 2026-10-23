@@ -9,6 +9,13 @@
 
 namespace dynamicam {
 
+// Shared slots — PerspectiveSystem.cpp reads from these after scanning
+void *s_scanned_GetPlayerPos  = nullptr;
+void *s_scanned_GetCameraPos  = nullptr;
+void *s_scanned_SetCameraPos  = nullptr;
+void *s_scanned_GetCameraRot  = nullptr;
+void *s_scanned_SetHeadVis    = nullptr;
+
 #define LOG_TAG "Dynamicam_Scan"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
